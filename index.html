@@ -2,36 +2,38 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Harmonica Hero (Playable Build)</title>
+<title>Harmonica Hero</title>
 
 <style>
 body {
     margin:0;
-    background: radial-gradient(circle at center, #0f0f15, #050507);
+    background:#0b0b0f;
     color:white;
     font-family:Arial;
     text-align:center;
-}
-
-h2 {
-    margin:10px;
 }
 
 canvas {
     display:block;
     margin:auto;
     background:#0b0b0f;
-    border:2px solid #222;
+}
+
+button {
+    padding:10px 20px;
+    margin:5px;
+    background:#222;
+    color:white;
+    border:1px solid #444;
+    cursor:pointer;
+}
+
+#menu {
+    padding:20px;
 }
 
 #hud {
     margin-top:10px;
-    font-size:18px;
-}
-
-#feedback {
-    font-size:22px;
-    margin-top:5px;
 }
 </style>
 </head>
@@ -40,12 +42,21 @@ canvas {
 
 <h2>🎵 Harmonica Hero</h2>
 
-<canvas id="gameCanvas" width="700" height="700"></canvas>
+<div id="menu">
+    <h3>Select Song</h3>
+    <div id="songList"></div>
+</div>
 
-<div id="hud">
+<canvas id="gameCanvas" width="700" height="700" style="display:none;"></canvas>
+
+<div id="hud" style="display:none;">
 Score: <span id="score">0</span> |
 Combo: <span id="combo">0</span>
 <div id="feedback"></div>
+
+<br>
+<button onclick="restart()">Restart</button>
+<button onclick="backToMenu()">Menu</button>
 </div>
 
 <script>
@@ -54,42 +65,52 @@ const ctx = canvas.getContext("2d");
 
 const laneCount = 10;
 const laneWidth = canvas.width / laneCount;
-
 const hitY = canvas.height - 120;
 const speed = 300;
 
 let notes = [];
 let startTime = 0;
+let running = false;
 
 let score = 0;
 let combo = 0;
-
 let inputKey = null;
 
-// 🎵 SONG (simple but playable)
-const song = [
-{hole:4,time:1},
-{hole:5,time:1.5},
-{hole:6,time:2},
-{hole:5,time:2.5},
-{hole:4,time:3},
-{hole:4,time:3.5},
-{hole:5,time:4},
-{hole:6,time:4.5},
-{hole:5,time:5},
-{hole:4,time:5.5}
+// 🎵 SONG LIBRARY
+const songs = [
+{
+    name:"Easy Scale",
+    data:[
+        {hole:4,time:1},
+        {hole:5,time:2},
+        {hole:6,time:3},
+        {hole:5,time:4},
+        {hole:4,time:5}
+    ]
+},
+{
+    name:"Faster Pattern",
+    data:[
+        {hole:4,time:1},
+        {hole:5,time:1.5},
+        {hole:6,time:2},
+        {hole:5,time:2.5},
+        {hole:4,time:3}
+    ]
+}
 ];
 
-// INIT NOTES
-function initNotes(){
-    notes = song.map(n => ({
-        ...n,
-        judged:false,
-        hit:false
-    }));
-}
+// BUILD MENU
+const songList = document.getElementById("songList");
 
-// KEY INPUT
+songs.forEach((s,i)=>{
+    const btn = document.createElement("button");
+    btn.innerText = s.name;
+    btn.onclick = ()=>startGame(i);
+    songList.appendChild(btn);
+});
+
+// INPUT
 window.addEventListener("keydown", e=>{
     const k = parseInt(e.key);
     if(!isNaN(k)){
@@ -98,27 +119,38 @@ window.addEventListener("keydown", e=>{
 });
 
 // START GAME
-function start(){
+function startGame(index){
+    document.getElementById("menu").style.display="none";
+    canvas.style.display="block";
+    document.getElementById("hud").style.display="block";
+
     score = 0;
     combo = 0;
-    initNotes();
+
+    notes = songs[index].data.map(n=>({
+        ...n,
+        judged:false
+    }));
+
     startTime = performance.now()/1000;
+    running = true;
+
     loop();
 }
 
-start();
-
-// MAIN LOOP
+// LOOP
 function loop(){
+    if(!running) return;
+
     let now = performance.now()/1000 - startTime;
 
     drawBackground();
     drawHitLine();
 
     notes.forEach(note=>{
-        let y = hitY - (note.time - now)*speed;
+        let y = hitY - (note.time-now)*speed;
 
-        if(y > -50 && y < canvas.height){
+        if(y>-50 && y<canvas.height){
             drawNote(note, y);
             handleHit(note, now);
         }
@@ -132,122 +164,78 @@ function loop(){
     requestAnimationFrame(loop);
 }
 
-// DRAW BACKGROUND + LANES
+// DRAW
 function drawBackground(){
-    ctx.fillStyle = "#0a0a0f";
+    ctx.fillStyle="#0a0a0f";
     ctx.fillRect(0,0,canvas.width,canvas.height);
 
     for(let i=0;i<laneCount;i++){
-        let x = i * laneWidth;
-
+        let x=i*laneWidth;
         ctx.fillStyle = i%2 ? "#111" : "#151515";
         ctx.fillRect(x,0,laneWidth,canvas.height);
-
-        ctx.strokeStyle="#222";
-        ctx.beginPath();
-        ctx.moveTo(x,0);
-        ctx.lineTo(x,canvas.height);
-        ctx.stroke();
     }
 }
 
-// HIT LINE
 function drawHitLine(){
-    ctx.shadowBlur = 20;
-    ctx.shadowColor = "white";
-
     ctx.fillStyle="white";
     ctx.fillRect(0,hitY,canvas.width,4);
-
-    ctx.shadowBlur = 0;
 }
 
-// DRAW NOTE
-function drawNote(note, y){
-    let x = (note.hole - 1) * laneWidth;
-
-    let delta = Math.abs(note.time - (performance.now()/1000 - startTime));
-
-    if(delta < 0.1){
-        ctx.shadowBlur = 20;
-        ctx.shadowColor = "lime";
-    } else {
-        ctx.shadowBlur = 0;
-    }
-
-    let grad = ctx.createLinearGradient(0,y,0,y+20);
-    grad.addColorStop(0,"#00f5ff");
-    grad.addColorStop(1,"#00a2ff");
-
-    ctx.fillStyle = grad;
-    roundRect(ctx, x+10, y, laneWidth-20, 20, 6);
-    ctx.fill();
-
-    ctx.shadowBlur = 0;
+function drawNote(note,y){
+    let x=(note.hole-1)*laneWidth;
+    ctx.fillStyle="cyan";
+    ctx.fillRect(x+10,y,laneWidth-20,20);
 }
 
 // HIT LOGIC
 function handleHit(note, now){
-    let delta = Math.abs(note.time - now);
+    let delta=Math.abs(note.time-now);
 
-    if(!note.judged && delta < 0.2){
-
-        if(inputKey === note.hole){
-            note.judged = true;
+    if(!note.judged && delta<0.2){
+        if(inputKey===note.hole){
+            note.judged=true;
             combo++;
 
-            if(delta < 0.07){
-                score += 150;
+            if(delta<0.07){
+                score+=150;
                 feedback("Perfect","lime");
             } else {
-                score += 100;
+                score+=100;
                 feedback("Good","yellow");
             }
-
-            flash();
-
-        } else if(delta < 0.05){
-            // grace window
         } else {
-            note.judged = true;
-            combo = 0;
+            note.judged=true;
+            combo=0;
             feedback("Miss","red");
         }
     }
 
-    if(!note.judged && now - note.time > 0.25){
-        note.judged = true;
-        combo = 0;
+    if(!note.judged && now-note.time>0.25){
+        note.judged=true;
+        combo=0;
         feedback("Miss","red");
     }
 }
 
-// FEEDBACK
+// UI
 function feedback(text,color){
-    const el = document.getElementById("feedback");
-    el.innerText = text;
-    el.style.color = color;
+    const el=document.getElementById("feedback");
+    el.innerText=text;
+    el.style.color=color;
 }
 
-// SCREEN FLASH
-function flash(){
-    canvas.style.background = "#1a1a1a";
-    setTimeout(()=>canvas.style.background="#0b0b0f",50);
+function restart(){
+    startTime = performance.now()/1000;
+    score = 0;
+    combo = 0;
+    notes.forEach(n=>n.judged=false);
 }
 
-// ROUNDED RECT
-function roundRect(ctx, x, y, w, h, r){
-    ctx.beginPath();
-    ctx.moveTo(x+r,y);
-    ctx.lineTo(x+w-r,y);
-    ctx.quadraticCurveTo(x+w,y,x+w,y+r);
-    ctx.lineTo(x+w,y+h-r);
-    ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
-    ctx.lineTo(x+r,y+h);
-    ctx.quadraticCurveTo(x,y+h,x,y+h-r);
-    ctx.lineTo(x,y+r);
-    ctx.quadraticCurveTo(x,y,x+r,y);
-    ctx.closePath();
+function backToMenu(){
+    running=false;
+    canvas.style.display="none";
+    document.getElementById("hud").style.display="none";
+    document.getElementById("menu").style.display="block";
 }
 </script>
 
