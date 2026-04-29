@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Harmonica Hero MVP</title>
+<style>
+    body {
+        margin: 0;
+        background: #0b0b0f;
+        color: white;
+        font-family: Arial;
+        text-align: center;
+    }
+
+    canvas {
+        background: #111;
+        display: block;
+        margin: auto;
+        border: 2px solid #333;
+    }
+
+    #controls {
+        padding: 10px;
+    }
+
+    button {
+        margin: 5px;
+        padding: 8px 12px;
+        cursor: pointer;
+        background: #222;
+        color: white;
+        border: 1px solid #444;
+    }
+
+    button:hover {
+        background: #444;
+    }
+
+    #stats {
+        margin-top: 10px;
+    }
+</style>
+</head>
+<body>
+
+<h2>🎵 Harmonica Hero MVP</h2>
+
+<div id="controls">
+    <button onclick="startGame()">Start</button>
+    <button onclick="calibrate()">Calibrate</button>
+    <input type="file" id="fileInput">
+</div>
+
+<canvas id="gameCanvas" width="500" height="700"></canvas>
+
+<div id="stats">
+    Combo: <span id="combo">0</span> |
+    Accuracy: <span id="accuracy">0%</span>
+</div>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+let audioCtx, analyser, micStream;
+let dataArray;
+let running = false;
+
+let calibrationOffset = 0;
+
+let combo = 0;
+let hits = 0;
+let total = 0;
+
+// 🎵 C Harmonica Mapping (Hz approx)
+const harmonicaMap = [
+    {hole:1, type:"blow", freq:261.6},
+    {hole:1, type:"draw", freq:293.7},
+    {hole:2, type:"blow", freq:329.6},
+    {hole:2, type:"draw", freq:392.0},
+    {hole:3, type:"blow", freq:392.0},
+    {hole:3, type:"draw", freq:440.0},
+    {hole:4, type:"blow", freq:523.3},
+    {hole:4, type:"draw", freq:587.3},
+    {hole:5, type:"blow", freq:659.3},
+    {hole:5, type:"draw", freq:698.5},
+    {hole:6, type:"blow", freq:784.0},
+    {hole:6, type:"draw", freq:880.0},
+    {hole:7, type:"blow", freq:1046.5},
+    {hole:7, type:"draw", freq:987.8},
+    {hole:8, type:"blow", freq:1318.5},
+    {hole:8, type:"draw", freq:1174.7},
+    {hole:9, type:"blow", freq:1568.0},
+    {hole:9, type:"draw", freq:1396.9},
+    {hole:10, type:"blow", freq:1760.0},
+    {hole:10, type:"draw", freq:1568.0}
+];
+
+// 🎼 10 SIMPLE BUILT-IN SONGS
+const songs = [
+    {
+        title: "Scale Up",
+        tempo: 90,
+        notes: Array.from({length: 10}, (_, i) => ({
+            hole: i+1,
+            type: "blow",
+            time: i * 0.8,
+            duration: 0.6
+        }))
+    },
+    {
+        title: "Scale Down",
+        tempo: 90,
+        notes: Array.from({length: 10}, (_, i) => ({
+            hole: 10 - i,
+            type: "draw",
+            time: i * 0.8,
+            duration: 0.6
+        }))
+    },
+    {
+        title: "Bounce",
+        tempo: 100,
+        notes: [4,5,4,5,4,5].map((h, i)=>({
+            hole: h,
+            type: "blow",
+            time: i*0.6,
+            duration: 0.5
+        }))
+    },
+    {
+        title: "Simple Melody 1",
+        tempo: 80,
+        notes: [
+            {hole:4,type:"blow",time:0,duration:1},
+            {hole:4,type:"draw",time:1,duration:1},
+            {hole:5,type:"blow",time:2,duration:1},
+            {hole:6,type:"blow",time:3,duration:1}
+        ]
+    },
+    {
+        title: "Simple Melody 2",
+        tempo: 85,
+        notes: [
+            {hole:5,type:"draw",time:0,duration:1},
+            {hole:5,type:"blow",time:1,duration:1},
+            {hole:4,type:"draw",time:2,duration:1},
+            {hole:4,type:"blow",time:3,duration:1}
+        ]
+    },
+    {
+        title: "Blues Walk",
+        tempo: 95,
+        notes: [
+            {hole:2,type:"draw",time:0,duration:1},
+            {hole:3,type:"draw",time:1,duration:1},
+            {hole:4,type:"draw",time:2,duration:1},
+            {hole:4,type:"blow",time:3,duration:1}
+        ]
+    },
+    {
+        title: "Rhythm Pulse",
+        tempo: 110,
+        notes: Array.from({length: 8}, (_, i)=>({
+            hole: 4,
+            type: i%2===0?"blow":"draw",
+            time: i*0.5,
+            duration: 0.4
+        }))
+    },
+    {
+        title: "Up & Down",
+        tempo: 90,
+        notes: [4,5,6,5,4].map((h,i)=>({
+            hole:h,
+            type:"blow",
+            time:i*0.7,
+            duration:0.5
+        }))
+    },
+    {
+        title: "Slow Steps",
+        tempo: 60,
+        notes: [
+            {hole:4,type:"blow",time:0,duration:2},
+            {hole:5,type:"blow",time:2,duration:2}
+        ]
+    },
+    {
+        title: "Quick Run",
+        tempo: 120,
+        notes: [4,5,6,7,6,5,4].map((h,i)=>({
+            hole:h,
+            type:"blow",
+            time:i*0.4,
+            duration:0.3
+        }))
+    }
+];
+
+let currentSong = songs[0];
+let startTime = 0;
+
+// 🎤 INIT MIC
+async function initMic() {
+    audioCtx = new AudioContext();
+    micStream = await navigator.mediaDevices.getUserMedia({audio:true});
+    const source = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+    dataArray = new Float32Array(analyser.fftSize);
+}
+
+// 🎧 PITCH DETECTION
+function getPitch() {
+    analyser.getFloatTimeDomainData(dataArray);
+
+    let bestOffset = -1;
+    let bestCorrelation = 0;
+
+    for (let offset = 8; offset < 1000; offset++) {
+        let correlation = 0;
+        for (let i = 0; i < 1000; i++) {
+            correlation += dataArray[i] * dataArray[i + offset];
+        }
+        correlation /= 1000;
+
+        if (correlation > bestCorrelation) {
+            bestCorrelation = correlation;
+            bestOffset = offset;
+        }
+    }
+
+    if (bestCorrelation > 0.01) {
+        return audioCtx.sampleRate / bestOffset;
+    }
+
+    return null;
+}
+
+function freqToNote(freq) {
+    if (!freq) return null;
+
+    let closest = null;
+    let minDiff = Infinity;
+
+    for (let note of harmonicaMap) {
+        let diff = Math.abs(note.freq - freq);
+        if (diff < minDiff) {
+            minDiff = diff;
+            closest = note;
+        }
+    }
+
+    return closest;
+}
+
+// 🎮 GAME
+function startGame() {
+    combo = 0;
+    hits = 0;
+    total = 0;
+
+    startTime = performance.now() / 1000;
+    running = true;
+
+    loop();
+}
+
+function calibrate() {
+    calibrationOffset = 0.2;
+    alert("Calibration set to ~200ms");
+}
+
+function loop() {
+    if (!running) return;
+
+    let now = performance.now() / 1000 - startTime - calibrationOffset;
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    drawHarmonica();
+
+    let freq = getPitch();
+    let played = freqToNote(freq);
+
+    currentSong.notes.forEach(note => {
+        let y = canvas.height - (note.time - now) * 200;
+
+        if (y > 0 && y < canvas.height) {
+            ctx.fillStyle = "cyan";
+            ctx.fillRect(note.hole * 40, y, 30, 20);
+
+            if (Math.abs(y - (canvas.height - 100)) < 15) {
+                total++;
+
+                if (played &&
+                    played.hole === note.hole &&
+                    played.type === note.type) {
+
+                    combo++;
+                    hits++;
+                } else {
+                    combo = 0;
+                }
+            }
+        }
+    });
+
+    document.getElementById("combo").innerText = combo;
+    document.getElementById("accuracy").innerText =
+        total ? Math.round((hits/total)*100) + "%" : "0%";
+
+    requestAnimationFrame(loop);
+}
+
+function drawHarmonica() {
+    for (let i = 1; i <= 10; i++) {
+        ctx.fillStyle = "#333";
+        ctx.fillRect(i * 40, canvas.height - 80, 30, 60);
+
+        ctx.fillStyle = "#888";
+        ctx.fillText(i, i * 40 + 10, canvas.height - 10);
+    }
+}
+
+// 📂 LOAD CUSTOM SONG
+document.getElementById("fileInput").addEventListener("change", e => {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+
+    reader.onload = () => {
+        currentSong = JSON.parse(reader.result);
+        alert("Custom song loaded!");
+    };
+
+    reader.readAsText(file);
+});
+
+// INIT
+initMic();
+
+</script>
+
+</body>
+</html>
