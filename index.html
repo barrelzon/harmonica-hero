@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Harmonica Hero X + Audio</title>
+<title>Harmonica Hero PRO MAX</title>
 <style>
 body {
     margin:0;
@@ -18,12 +18,8 @@ canvas {
     background:#111;
 }
 
-button {
-    margin:5px;
+#controls {
     padding:10px;
-    background:#222;
-    color:white;
-    border:1px solid #444;
 }
 
 #progressBar {
@@ -32,7 +28,6 @@ button {
     background:#222;
     margin:10px auto;
 }
-
 #progress {
     height:100%;
     width:0%;
@@ -42,38 +37,51 @@ button {
 </head>
 <body>
 
-<h2>🎵 Harmonica Hero X (Audio)</h2>
+<h2>🎵 Harmonica Hero PRO MAX</h2>
 
-<div id="menu"></div>
+<div id="controls">
+<button onclick="start()">Start</button>
+<label>Offset:
+<input type="range" min="-0.5" max="0.5" step="0.01" value="0" id="offsetSlider">
+</label>
+</div>
 
-<canvas id="gameCanvas" width="700" height="700" style="display:none;"></canvas>
+<canvas id="waveCanvas" width="700" height="100"></canvas>
+<canvas id="gameCanvas" width="700" height="600"></canvas>
 
-<div id="hud" style="display:none;">
 <div id="progressBar"><div id="progress"></div></div>
+
+<div>
 Score: <span id="score">0</span> |
 Combo: <span id="combo">0</span> |
 Accuracy: <span id="accuracy">0%</span>
-<div id="tabDisplay">---</div>
-<div id="feedback"></div>
-<button onclick="back()">Back</button>
 </div>
 
+<div id="feedback"></div>
+
 <script>
+// ===== SETUP =====
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 
-const hitY = canvas.height - 120;
+const waveCanvas = document.getElementById("waveCanvas");
+const wctx = waveCanvas.getContext("2d");
+
+const hitY = canvas.height - 100;
 const laneWidth = canvas.width / 10;
 const speed = 240;
 
 let audioCtx, analyser, dataArray;
-let backingAudio = null;
+let backingAudio;
 
-let startTime=0;
-let running=false;
+let offset = 0;
+document.getElementById("offsetSlider").oninput = e=>{
+    offset = parseFloat(e.target.value);
+};
 
-let score=0,combo=0,hits=0,total=0;
+let score=0, combo=0, hits=0, total=0;
 
+// ===== HARMONICA MAP =====
 const harmonicaMap = [
 {hole:4,type:"blow",freq:523.3},
 {hole:4,type:"draw",freq:587.3},
@@ -83,50 +91,30 @@ const harmonicaMap = [
 {hole:6,type:"draw",freq:880.0}
 ];
 
-const songs = [
-{
-title:"Ode to Joy",
+// ===== SONG =====
+const song = {
 audio:"ode.mp3",
 notes:[
 {hole:4,type:"blow",time:0,duration:0.6},
 {hole:5,type:"blow",time:1,duration:0.6},
 {hole:6,type:"blow",time:2,duration:0.6}
 ]
-},
-{
-title:"Saints",
-audio:"saints.mp3",
-notes:[
-{hole:4,type:"blow",time:0,duration:0.5},
-{hole:5,type:"blow",time:1,duration:0.5},
-{hole:6,type:"blow",time:2,duration:0.5}
-]
-}
-];
+};
 
-// MENU
-const menu=document.getElementById("menu");
-
-songs.forEach((s,i)=>{
-let b=document.createElement("button");
-b.innerText=s.title;
-b.onclick=()=>start(i);
-menu.appendChild(b);
-});
-
-// MIC
+// ===== MIC =====
 async function initMic(){
-audioCtx=new AudioContext();
-const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-const source=audioCtx.createMediaStreamSource(stream);
+audioCtx = new AudioContext();
+const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+const source = audioCtx.createMediaStreamSource(stream);
 
-analyser=audioCtx.createAnalyser();
-analyser.fftSize=2048;
+analyser = audioCtx.createAnalyser();
+analyser.fftSize = 2048;
 
 source.connect(analyser);
-dataArray=new Float32Array(analyser.fftSize);
+dataArray = new Float32Array(analyser.fftSize);
 }
 
+// ===== PITCH =====
 function getPitch(){
 analyser.getFloatTimeDomainData(dataArray);
 
@@ -150,55 +138,61 @@ return audioCtx.sampleRate/bestOffset;
 return null;
 }
 
+// ===== NOTE DETECT =====
 function detect(freq){
 if(!freq)return null;
+
 let best=null,min=999;
 
 harmonicaMap.forEach(n=>{
 let d=Math.abs(n.freq-freq);
-if(d<min){min=d;best=n;}
+if(d<min){
+min=d;
+best=n;
+}
 });
+
 return best;
 }
 
-function tab(n){
-return n.type==="blow"?n.hole:"-"+n.hole;
+// ===== BEND DETECT =====
+function detectBend(freq, note){
+if(!freq || !note) return 0;
+return (freq - note.freq);
 }
 
-// START
-function start(i){
-const song=songs[i];
+// ===== WAVEFORM =====
+function drawWave(){
+analyser.getFloatTimeDomainData(dataArray);
 
-document.getElementById("menu").style.display="none";
-canvas.style.display="block";
-document.getElementById("hud").style.display="block";
+wctx.clearRect(0,0,waveCanvas.width,waveCanvas.height);
 
+wctx.beginPath();
+
+for(let i=0;i<dataArray.length;i++){
+let x = i / dataArray.length * waveCanvas.width;
+let y = (dataArray[i]*50) + waveCanvas.height/2;
+if(i===0) wctx.moveTo(x,y);
+else wctx.lineTo(x,y);
+}
+
+wctx.strokeStyle="lime";
+wctx.stroke();
+}
+
+// ===== START =====
+function start(){
 score=0;combo=0;hits=0;total=0;
 
-// AUDIO
 backingAudio = new Audio(song.audio);
-backingAudio.currentTime = 0;
 backingAudio.play();
 
-startTime=performance.now()/1000;
-running=true;
-
-loop(song);
+loop();
 }
 
-function back(){
-running=false;
-if(backingAudio) backingAudio.pause();
-
-canvas.style.display="none";
-document.getElementById("hud").style.display="none";
-document.getElementById("menu").style.display="block";
-}
-
-function loop(song){
-if(!running)return;
-
-let now = backingAudio ? backingAudio.currentTime : (performance.now()/1000-startTime);
+// ===== LOOP =====
+function loop(){
+let now = backingAudio.currentTime + offset;
 
 ctx.clearRect(0,0,canvas.width,canvas.height);
 
@@ -212,58 +206,66 @@ ctx.fillRect(i*laneWidth,0,laneWidth,canvas.height);
 ctx.fillStyle="white";
 ctx.fillRect(0,hitY,canvas.width,3);
 
-let freq=getPitch();
-let played=detect(freq);
+// waveform
+drawWave();
 
-let display="---";
+// pitch
+let freq = getPitch();
+let played = detect(freq);
 
 song.notes.forEach(note=>{
-let y=hitY-(note.time-now)*speed;
-let h=note.duration*speed;
+let y = hitY - (note.time - now)*speed;
+let h = note.duration * speed;
 
 if(y>-200 && y<canvas.height){
 
-let x=(note.hole-1)*laneWidth;
+let x = (note.hole-1)*laneWidth;
 
 ctx.fillStyle="cyan";
 ctx.fillRect(x+10,y-h,laneWidth-20,h);
 
-if(Math.abs(y-hitY)<20){
-ctx.fillStyle="lime";
-ctx.fillRect(x+10,y-h,laneWidth-20,h);
-}
-
-let delta=Math.abs(y-hitY);
+// hit
+let delta = Math.abs(y-hitY);
 
 if(delta<30){
-display=tab(note);
 total++;
 
+let result="Miss";
+
 if(played && played.hole===note.hole && played.type===note.type){
-hits++;combo++;score+=100;
-document.getElementById("feedback").innerText="Hit!";
+
+let bend = detectBend(freq, note);
+
+score+=100;
+combo++;
+hits++;
+
+if(Math.abs(bend)<5){
+result="Perfect";
+}else{
+result="Good (bend)";
+}
+
 }else{
 combo=0;
-document.getElementById("feedback").innerText="Miss";
 }
+
+document.getElementById("feedback").innerText=result;
 }
 }
 });
 
-document.getElementById("tabDisplay").innerText=display;
-
 // progress
-if(backingAudio){
 let progress = (backingAudio.currentTime/backingAudio.duration)*100;
-document.getElementById("progress").style.width=progress+"%";
-}
+document.getElementById("progress").style.width = progress + "%";
 
+// UI
 document.getElementById("score").innerText=score;
 document.getElementById("combo").innerText=combo;
 document.getElementById("accuracy").innerText =
 total?Math.round((hits/total)*100)+"%":"0%";
 
-requestAnimationFrame(()=>loop(song));
+requestAnimationFrame(loop);
 }
 
 initMic();
