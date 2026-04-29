@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Harmonica Hero (Playable + Mic)</title>
+<title>Harmonica Hero REAL</title>
 <style>
 body {
     margin:0;
@@ -20,20 +20,34 @@ canvas {
 
 #hud {
     margin-top:10px;
-    font-size:18px;
+}
+
+#progressBar {
+    width:80%;
+    height:10px;
+    background:#222;
+    margin:10px auto;
+}
+#progress {
+    height:100%;
+    width:0%;
+    background:lime;
 }
 </style>
 </head>
 <body>
 
-<h2>🎵 Harmonica Hero</h2>
+<h2>🎵 Harmonica Hero REAL</h2>
 
 <canvas id="gameCanvas" width="700" height="700"></canvas>
+
+<div id="progressBar"><div id="progress"></div></div>
 
 <div id="hud">
 Score: <span id="score">0</span> |
 Combo: <span id="combo">0</span>
 <div id="feedback"></div>
+<div id="offsetInfo">Offset: 0</div>
 </div>
 
 <script>
@@ -43,47 +57,45 @@ const ctx = canvas.getContext("2d");
 const laneCount = 10;
 const laneWidth = canvas.width / laneCount;
 const hitY = canvas.height - 120;
-const speed = 280;
+const speed = 260;
 
-let notes = [];
-let startTime = 0;
-let running = false;
+let score=0, combo=0;
+let notes=[], running=false;
 
-let score = 0;
-let combo = 0;
+let offset = 0;
 
-let inputHole = null;
-
-// 🎵 SIMPLE SONG
-const song = [
-{hole:4,time:1},
-{hole:5,time:2},
-{hole:6,time:3},
-{hole:5,time:4},
-{hole:4,time:5},
-];
+// 🎵 SONG
+const song = {
+audio:"ode.mp3",
+notes:[
+{hole:4,type:"blow",time:1},
+{hole:4,type:"draw",time:2},
+{hole:5,type:"blow",time:3},
+{hole:6,type:"blow",time:4},
+{hole:5,type:"draw",time:5},
+]
+};
 
 // 🎤 MIC
 let audioCtx, analyser, dataArray;
-let lastPitch = null;
+let lastPitch=null;
 
 async function initMic(){
-audioCtx = new AudioContext();
-const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-const source = audioCtx.createMediaStreamSource(stream);
+audioCtx=new AudioContext();
+const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+const source=audioCtx.createMediaStreamSource(stream);
 
-analyser = audioCtx.createAnalyser();
-analyser.fftSize = 2048;
+analyser=audioCtx.createAnalyser();
+analyser.fftSize=2048;
 
 source.connect(analyser);
-dataArray = new Float32Array(analyser.fftSize);
+dataArray=new Float32Array(analyser.fftSize);
 }
 
-// smoother pitch
 function getPitch(){
 analyser.getFloatTimeDomainData(dataArray);
 
-let bestOffset=-1, bestCorr=0;
+let bestOffset=-1,bestCorr=0;
 
 for(let o=8;o<800;o++){
 let corr=0;
@@ -99,58 +111,85 @@ bestOffset=o;
 }
 
 if(bestCorr>0.02){
-let freq = audioCtx.sampleRate / bestOffset;
-
-// smoothing
-if(lastPitch){
-freq = (freq + lastPitch) / 2;
-}
-lastPitch = freq;
-
+let freq=audioCtx.sampleRate/bestOffset;
+if(lastPitch) freq=(freq+lastPitch)/2;
+lastPitch=freq;
 return freq;
 }
 return null;
 }
 
-// map freq → hole
-function freqToHole(freq){
+// 🎵 FULL 10 HOLE MAP (approx)
+const harmonica = [
+{hole:1,type:"blow",freq:261},
+{hole:1,type:"draw",freq:293},
+{hole:2,type:"blow",freq:329},
+{hole:2,type:"draw",freq:392},
+{hole:3,type:"blow",freq:392},
+{hole:3,type:"draw",freq:440},
+{hole:4,type:"blow",freq:523},
+{hole:4,type:"draw",freq:587},
+{hole:5,type:"blow",freq:659},
+{hole:5,type:"draw",freq:698},
+{hole:6,type:"blow",freq:784},
+{hole:6,type:"draw",freq:880},
+{hole:7,type:"blow",freq:1046},
+{hole:7,type:"draw",freq:988},
+{hole:8,type:"blow",freq:1318},
+{hole:8,type:"draw",freq:1174},
+{hole:9,type:"blow",freq:1568},
+{hole:9,type:"draw",freq:1396},
+{hole:10,type:"blow",freq:1760},
+{hole:10,type:"draw",freq:1568},
+];
+
+function detectNote(freq){
 if(!freq) return null;
 
-// VERY simplified mapping (stable > accurate)
-if(freq < 550) return 4;
-if(freq < 700) return 5;
-if(freq < 900) return 6;
-return null;
+let best=null,min=999;
+
+harmonica.forEach(n=>{
+let d=Math.abs(n.freq-freq);
+if(d<min){
+min=d;
+best=n;
+}
+});
+
+return best;
 }
 
-// 🎹 KEYBOARD BACKUP
+// 🎹 keyboard backup
+let keyInput=null;
 window.addEventListener("keydown", e=>{
-let k = parseInt(e.key);
+let k=parseInt(e.key);
 if(!isNaN(k)){
-inputHole = k===0?10:k;
+keyInput = k===0?10:k;
 }
+
+if(e.key==="ArrowLeft") offset-=0.02;
+if(e.key==="ArrowRight") offset+=0.02;
+
+document.getElementById("offsetInfo").innerText="Offset: "+offset.toFixed(2);
 });
 
 // INIT
 function initNotes(){
-notes = song.map(n=>({
-...n,
-hit:false,
-judged:false
-}));
+notes = song.notes.map(n=>({...n,hit:false,judged:false}));
 }
 
 // START
+let audio;
 async function start(){
 await initMic();
 
-score=0;
-combo=0;
+audio = new Audio(song.audio);
+audio.play();
 
 initNotes();
 
-startTime = performance.now()/1000;
-running = true;
+score=0;combo=0;
+running=true;
 
 loop();
 }
@@ -161,96 +200,88 @@ start();
 function loop(){
 if(!running) return;
 
-let now = performance.now()/1000 - startTime;
+let now = audio.currentTime + offset;
 
 ctx.clearRect(0,0,canvas.width,canvas.height);
 
 // lanes
 for(let i=0;i<laneCount;i++){
-let grad = ctx.createLinearGradient(0,0,0,canvas.height);
-grad.addColorStop(0,"#111");
-grad.addColorStop(1,"#222");
-
-ctx.fillStyle = grad;
+ctx.fillStyle="rgba(255,255,255,0.03)";
 ctx.fillRect(i*laneWidth,0,laneWidth,canvas.height);
 }
 
-// hit line glow
+// hit line
 ctx.fillStyle="white";
-ctx.fillRect(0,hitY,canvas.width,4);
+ctx.fillRect(0,hitY,canvas.width,3);
 
-// mic input
-let freq = getPitch();
-let micHole = freqToHole(freq);
+let freq=getPitch();
+let detected=detectNote(freq);
 
-// choose input (mic first)
-let activeInput = micHole || inputHole;
+let activeHole = detected?.hole || keyInput;
 
 notes.forEach(note=>{
-let y = hitY - (note.time - now)*speed;
+let y = hitY - (note.time-now)*speed;
 
 if(y>-50 && y<canvas.height){
 
-let x = (note.hole-1)*laneWidth;
+let x=(note.hole-1)*laneWidth;
 
-// glow if close
-let delta = Math.abs(note.time - now);
-let glow = delta < 0.1;
+let delta=Math.abs(note.time-now);
 
-ctx.fillStyle = glow ? "lime" : "cyan";
+ctx.fillStyle = delta<0.1 ? "lime" : "cyan";
 ctx.fillRect(x+10,y,laneWidth-20,20);
 
 // HIT
-if(!note.judged && delta < 0.2){
+if(!note.judged && delta<0.2){
 
-if(activeInput === note.hole){
-note.hit = true;
-note.judged = true;
-
-if(delta < 0.07){
-score+=150;
+if(activeHole===note.hole){
+note.judged=true;
 combo++;
+
+if(delta<0.07){
+score+=150;
 showFeedback("Perfect");
 }else{
 score+=100;
-combo++;
 showFeedback("Good");
 }
 
-}else if(delta < 0.05){
-// slight forgiveness window
 }else{
-note.judged = true;
-combo = 0;
+note.judged=true;
+combo=0;
 showFeedback("Miss");
 }
 }
 
-// MISS fallback
-if(!note.judged && now - note.time > 0.25){
-note.judged = true;
-combo = 0;
+// MISS
+if(!note.judged && now-note.time>0.25){
+note.judged=true;
+combo=0;
 showFeedback("Miss");
 }
 }
 });
 
-inputHole = null;
+keyInput=null;
 
-document.getElementById("score").innerText = score;
-document.getElementById("combo").innerText = combo;
+// progress
+let progress=(audio.currentTime/audio.duration)*100;
+document.getElementById("progress").style.width=progress+"%";
+
+// UI
+document.getElementById("score").innerText=score;
+document.getElementById("combo").innerText=combo;
 
 requestAnimationFrame(loop);
 }
 
-// FEEDBACK
-function showFeedback(text){
-const el = document.getElementById("feedback");
-el.innerText = text;
-
+// feedback
+function showFeedback(t){
+const el=document.getElementById("feedback");
+el.innerText=t;
 el.style.color =
-text==="Perfect"?"lime":
-text==="Good"?"yellow":
+t==="Perfect"?"lime":
+t==="Good"?"yellow":
 "red";
 }
 </script>
