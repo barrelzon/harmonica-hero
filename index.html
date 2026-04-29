@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Harmonica Hero</title>
+<title>Harmonica Hero Ultimate</title>
 
 <style>
 body {
     margin:0;
-    background:#0b0b0f;
+    background:#050507;
     color:white;
     font-family:Arial;
     text-align:center;
@@ -16,226 +16,273 @@ body {
 canvas {
     display:block;
     margin:auto;
-    background:#0b0b0f;
+    background:#08080c;
 }
 
 button {
-    padding:10px 20px;
+    padding:10px;
     margin:5px;
     background:#222;
     color:white;
     border:1px solid #444;
-    cursor:pointer;
 }
 
-#menu {
-    padding:20px;
-}
+.hidden { display:none; }
 
-#hud {
-    margin-top:10px;
-}
+#hud { margin-top:10px; }
+#feedback { font-size:24px; }
 </style>
 </head>
 
 <body>
 
-<h2>🎵 Harmonica Hero</h2>
+<h2>🎵 Harmonica Hero Ultimate</h2>
 
 <div id="menu">
     <h3>Select Song</h3>
     <div id="songList"></div>
 </div>
 
-<canvas id="gameCanvas" width="700" height="700" style="display:none;"></canvas>
+<canvas id="gameCanvas" width="700" height="700" class="hidden"></canvas>
 
-<div id="hud" style="display:none;">
+<div id="hud" class="hidden">
 Score: <span id="score">0</span> |
-Combo: <span id="combo">0</span>
+Combo: <span id="combo">0</span> |
+Progress: <span id="progressText">0%</span>
 <div id="feedback"></div>
+</div>
 
-<br>
-<button onclick="restart()">Restart</button>
-<button onclick="backToMenu()">Menu</button>
+<div id="results" class="hidden">
+<h3>Results</h3>
+<p id="finalScore"></p>
+<button onclick="goMenu()">Back to Menu</button>
 </div>
 
 <script>
+// ===== BASIC SETUP =====
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 
-const laneCount = 10;
-const laneWidth = canvas.width / laneCount;
+const laneWidth = canvas.width / 10;
 const hitY = canvas.height - 120;
 const speed = 300;
 
-let notes = [];
-let startTime = 0;
-let running = false;
+// ===== GAME STATE =====
+let state = "menu"; // menu | game | results
 
-let score = 0;
-let combo = 0;
-let inputKey = null;
+let audio, notes=[], particles=[];
+let score=0, combo=0, hits=0;
 
-// 🎵 SONG LIBRARY
+// ===== SONGS =====
 const songs = [
 {
-    name:"Easy Scale",
-    data:[
-        {hole:4,time:1},
-        {hole:5,time:2},
-        {hole:6,time:3},
-        {hole:5,time:4},
-        {hole:4,time:5}
-    ]
+name:"Ode to Joy",
+audio:"ode.mp3",
+notes:[
+{hole:4,time:1},{hole:5,time:2},{hole:6,time:3},
+{hole:5,time:4},{hole:4,time:5}
+]
 },
 {
-    name:"Faster Pattern",
-    data:[
-        {hole:4,time:1},
-        {hole:5,time:1.5},
-        {hole:6,time:2},
-        {hole:5,time:2.5},
-        {hole:4,time:3}
-    ]
+name:"Saints",
+audio:"saints.mp3",
+notes:[
+{hole:4,time:1},{hole:5,time:2},{hole:6,time:3}
+]
 }
 ];
 
-// BUILD MENU
+// ===== BUILD MENU =====
 const songList = document.getElementById("songList");
 
 songs.forEach((s,i)=>{
-    const btn = document.createElement("button");
-    btn.innerText = s.name;
-    btn.onclick = ()=>startGame(i);
-    songList.appendChild(btn);
+let b=document.createElement("button");
+b.innerText=s.name;
+b.onclick=()=>startGame(i);
+songList.appendChild(b);
 });
 
-// INPUT
-window.addEventListener("keydown", e=>{
-    const k = parseInt(e.key);
-    if(!isNaN(k)){
-        inputKey = k === 0 ? 10 : k;
-    }
-});
+// ===== MIC =====
+let audioCtx, analyser, buf, lastFreq;
 
-// START GAME
-function startGame(index){
-    document.getElementById("menu").style.display="none";
-    canvas.style.display="block";
-    document.getElementById("hud").style.display="block";
+async function initMic(){
+audioCtx=new AudioContext();
+const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+const src=audioCtx.createMediaStreamSource(stream);
 
-    score = 0;
-    combo = 0;
+analyser=audioCtx.createAnalyser();
+analyser.fftSize=2048;
 
-    notes = songs[index].data.map(n=>({
-        ...n,
-        judged:false
-    }));
-
-    startTime = performance.now()/1000;
-    running = true;
-
-    loop();
+src.connect(analyser);
+buf=new Float32Array(analyser.fftSize);
 }
 
-// LOOP
+function getPitch(){
+analyser.getFloatTimeDomainData(buf);
+
+let bestOffset=-1,bestCorr=0;
+
+for(let o=8;o<800;o++){
+let corr=0;
+for(let i=0;i<800;i++){
+corr+=buf[i]*buf[i+o];
+}
+corr/=800;
+
+if(corr>bestCorr){
+bestCorr=corr;
+bestOffset=o;
+}
+}
+
+if(bestCorr>0.02){
+let freq=audioCtx.sampleRate/bestOffset;
+if(lastFreq) freq=(freq+lastFreq)/2;
+lastFreq=freq;
+return freq;
+}
+return null;
+}
+
+function mapFreq(f){
+if(!f)return null;
+if(f<550)return 4;
+if(f<700)return 5;
+if(f<900)return 6;
+return null;
+}
+
+// ===== START GAME =====
+async function startGame(i){
+await initMic();
+
+notes = songs[i].notes.map(n=>({...n,hit:false}));
+audio = new Audio(songs[i].audio);
+audio.play();
+
+score=0; combo=0; hits=0;
+
+document.getElementById("menu").classList.add("hidden");
+canvas.classList.remove("hidden");
+document.getElementById("hud").classList.remove("hidden");
+
+state="game";
+loop();
+}
+
+// ===== LOOP =====
 function loop(){
-    if(!running) return;
+if(state!=="game") return;
 
-    let now = performance.now()/1000 - startTime;
+let now = audio.currentTime;
 
-    drawBackground();
-    drawHitLine();
+ctx.clearRect(0,0,canvas.width,canvas.height);
 
-    notes.forEach(note=>{
-        let y = hitY - (note.time-now)*speed;
-
-        if(y>-50 && y<canvas.height){
-            drawNote(note, y);
-            handleHit(note, now);
-        }
-    });
-
-    inputKey = null;
-
-    document.getElementById("score").innerText = score;
-    document.getElementById("combo").innerText = combo;
-
-    requestAnimationFrame(loop);
+// lanes
+for(let i=0;i<10;i++){
+ctx.fillStyle=i%2?"#0c0c12":"#101018";
+ctx.fillRect(i*laneWidth,0,laneWidth,canvas.height);
 }
 
-// DRAW
-function drawBackground(){
-    ctx.fillStyle="#0a0a0f";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
+// hit line
+ctx.fillStyle="white";
+ctx.fillRect(0,hitY,canvas.width,3);
 
-    for(let i=0;i<laneCount;i++){
-        let x=i*laneWidth;
-        ctx.fillStyle = i%2 ? "#111" : "#151515";
-        ctx.fillRect(x,0,laneWidth,canvas.height);
-    }
+// input
+let freq=getPitch();
+let input=mapFreq(freq);
+
+// notes
+notes.forEach(n=>{
+let y=hitY-(n.time-now)*speed;
+
+if(y>-50 && y<canvas.height){
+let x=(n.hole-1)*laneWidth;
+
+ctx.fillStyle="#00f5ff";
+ctx.fillRect(x+10,y,laneWidth-20,20);
+
+let d=Math.abs(n.time-now);
+
+if(!n.hit && d<0.2){
+if(input===n.hole){
+n.hit=true;
+hits++;
+combo++;
+score+=100+combo*5;
+spawnParticles(x+20,y);
+feedback("Perfect");
+}else{
+n.hit=true;
+combo=0;
+feedback("Miss");
 }
-
-function drawHitLine(){
-    ctx.fillStyle="white";
-    ctx.fillRect(0,hitY,canvas.width,4);
 }
-
-function drawNote(note,y){
-    let x=(note.hole-1)*laneWidth;
-    ctx.fillStyle="cyan";
-    ctx.fillRect(x+10,y,laneWidth-20,20);
 }
+});
 
-// HIT LOGIC
-function handleHit(note, now){
-    let delta=Math.abs(note.time-now);
+// progress
+let last = notes[notes.length-1].time;
+let prog = Math.min(100,(now/last)*100);
+document.getElementById("progressText").innerText = prog.toFixed(0)+"%";
 
-    if(!note.judged && delta<0.2){
-        if(inputKey===note.hole){
-            note.judged=true;
-            combo++;
+// particles
+particles.forEach(p=>{
+p.x+=p.vx;
+p.y+=p.vy;
+p.life--;
 
-            if(delta<0.07){
-                score+=150;
-                feedback("Perfect","lime");
-            } else {
-                score+=100;
-                feedback("Good","yellow");
-            }
-        } else {
-            note.judged=true;
-            combo=0;
-            feedback("Miss","red");
-        }
-    }
-
-    if(!note.judged && now-note.time>0.25){
-        note.judged=true;
-        combo=0;
-        feedback("Miss","red");
-    }
-}
+ctx.fillStyle="lime";
+ctx.fillRect(p.x,p.y,3,3);
+});
+particles = particles.filter(p=>p.life>0);
 
 // UI
-function feedback(text,color){
-    const el=document.getElementById("feedback");
-    el.innerText=text;
-    el.style.color=color;
+scoreEl.innerText=score;
+comboEl.innerText=combo;
+
+// END
+if(now > last+1){
+endGame();
 }
 
-function restart(){
-    startTime = performance.now()/1000;
-    score = 0;
-    combo = 0;
-    notes.forEach(n=>n.judged=false);
+requestAnimationFrame(loop);
 }
 
-function backToMenu(){
-    running=false;
-    canvas.style.display="none";
-    document.getElementById("hud").style.display="none";
-    document.getElementById("menu").style.display="block";
+// ===== PARTICLES =====
+function spawnParticles(x,y){
+for(let i=0;i<10;i++){
+particles.push({
+x,y,
+vx:(Math.random()-0.5)*5,
+vy:(Math.random()-0.5)*5,
+life:20
+});
+}
+}
+
+// ===== FEEDBACK =====
+function feedback(t){
+feedbackEl.innerText=t;
+feedbackEl.style.color = t==="Perfect"?"lime":"red";
+}
+
+// ===== END =====
+function endGame(){
+state="results";
+
+canvas.classList.add("hidden");
+document.getElementById("hud").classList.add("hidden");
+
+document.getElementById("results").classList.remove("hidden");
+document.getElementById("finalScore").innerText =
+"Score: "+score+" | Hits: "+hits;
+}
+
+// ===== NAV =====
+function goMenu(){
+document.getElementById("results").classList.add("hidden");
+document.getElementById("menu").classList.remove("hidden");
 }
 </script>
 
