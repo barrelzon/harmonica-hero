@@ -2,35 +2,47 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Harmonica Hero (Accurate + Content)</title>
+<title>Harmonica Hero (Playable Build)</title>
+
 <style>
 body {
     margin:0;
-    background:#0b0b0f;
+    background: radial-gradient(circle at center, #0f0f15, #050507);
     color:white;
     font-family:Arial;
     text-align:center;
 }
+
+h2 {
+    margin:10px;
+}
+
 canvas {
     display:block;
     margin:auto;
-    background:#111;
+    background:#0b0b0f;
+    border:2px solid #222;
 }
-button {
-    margin:5px;
-    padding:10px;
+
+#hud {
+    margin-top:10px;
+    font-size:18px;
+}
+
+#feedback {
+    font-size:22px;
+    margin-top:5px;
 }
 </style>
 </head>
+
 <body>
 
 <h2>🎵 Harmonica Hero</h2>
 
-<div id="menu"></div>
+<canvas id="gameCanvas" width="700" height="700"></canvas>
 
-<canvas id="gameCanvas" width="700" height="700" style="display:none;"></canvas>
-
-<div id="hud" style="display:none;">
+<div id="hud">
 Score: <span id="score">0</span> |
 Combo: <span id="combo">0</span>
 <div id="feedback"></div>
@@ -42,210 +54,201 @@ const ctx = canvas.getContext("2d");
 
 const laneCount = 10;
 const laneWidth = canvas.width / laneCount;
+
 const hitY = canvas.height - 120;
-const speed = 260;
+const speed = 300;
 
-let audioCtx, analyser, buffer;
-let running=false;
+let notes = [];
+let startTime = 0;
 
-let score=0, combo=0;
+let score = 0;
+let combo = 0;
 
-// 🎵 SONG LIBRARY
-const songs = [
-{
-title:"Ode to Joy",
-notes:[
-{hole:4,time:1},{hole:4,time:2},{hole:5,time:3},{hole:6,time:4}
-]
-},
-{
-title:"Twinkle",
-notes:[
-{hole:4,time:1},{hole:4,time:2},{hole:5,time:3},{hole:5,time:4}
-]
-},
-{
-title:"Mary Lamb",
-notes:[
-{hole:5,time:1},{hole:4,time:2},{hole:4,time:3},{hole:5,time:4}
-]
-},
-{
-title:"Saints",
-notes:[
-{hole:4,time:1},{hole:5,time:2},{hole:6,time:3}
-]
-},
-{
-title:"Scale",
-notes:Array.from({length:6},(_,i)=>({hole:4+i,time:i+1}))
-}
+let inputKey = null;
+
+// 🎵 SONG (simple but playable)
+const song = [
+{hole:4,time:1},
+{hole:5,time:1.5},
+{hole:6,time:2},
+{hole:5,time:2.5},
+{hole:4,time:3},
+{hole:4,time:3.5},
+{hole:5,time:4},
+{hole:6,time:4.5},
+{hole:5,time:5},
+{hole:4,time:5.5}
 ];
 
-// 🎤 MIC INIT
-async function initMic(){
-audioCtx = new AudioContext();
-const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-const source = audioCtx.createMediaStreamSource(stream);
-
-analyser = audioCtx.createAnalyser();
-analyser.fftSize = 2048;
-
-source.connect(analyser);
-buffer = new Float32Array(analyser.fftSize);
+// INIT NOTES
+function initNotes(){
+    notes = song.map(n => ({
+        ...n,
+        judged:false,
+        hit:false
+    }));
 }
 
-// 🎧 BETTER PITCH DETECTION
-function getPitch(){
-analyser.getFloatTimeDomainData(buffer);
-
-let bestOffset=-1, bestCorr=0;
-
-for(let offset=8; offset<1000; offset++){
-let corr=0;
-for(let i=0;i<1000;i++){
-corr += buffer[i] * buffer[i+offset];
-}
-corr/=1000;
-
-if(corr>bestCorr){
-bestCorr=corr;
-bestOffset=offset;
-}
-}
-
-if(bestCorr > 0.03){
-return audioCtx.sampleRate / bestOffset;
-}
-return null;
-}
-
-// 🎵 HARMONICA MAP
-const harmonica = [
-{hole:4,freq:523},{hole:5,freq:659},{hole:6,freq:784}
-];
-
-function detectHole(freq){
-if(!freq) return null;
-
-let best=null, min=999;
-
-harmonica.forEach(n=>{
-let d=Math.abs(n.freq-freq);
-if(d<min){min=d;best=n;}
+// KEY INPUT
+window.addEventListener("keydown", e=>{
+    const k = parseInt(e.key);
+    if(!isNaN(k)){
+        inputKey = k === 0 ? 10 : k;
+    }
 });
 
-return best?.hole;
+// START GAME
+function start(){
+    score = 0;
+    combo = 0;
+    initNotes();
+    startTime = performance.now()/1000;
+    loop();
 }
 
-// 🎮 START
-let notes=[];
-let startTime=0;
-let currentSong=null;
+start();
 
-function startSong(index){
-currentSong = songs[index];
-
-document.getElementById("menu").style.display="none";
-canvas.style.display="block";
-document.getElementById("hud").style.display="block";
-
-notes = currentSong.notes.map(n=>({...n,judged:false}));
-
-score=0;combo=0;
-startTime = performance.now()/1000;
-running=true;
-
-loop();
-}
-
-// 🎮 LOOP
+// MAIN LOOP
 function loop(){
-if(!running) return;
+    let now = performance.now()/1000 - startTime;
 
-let now = performance.now()/1000 - startTime;
+    drawBackground();
+    drawHitLine();
 
-ctx.clearRect(0,0,canvas.width,canvas.height);
+    notes.forEach(note=>{
+        let y = hitY - (note.time - now)*speed;
 
-// lanes
-for(let i=0;i<laneCount;i++){
-ctx.fillStyle="rgba(255,255,255,0.03)";
-ctx.fillRect(i*laneWidth,0,laneWidth,canvas.height);
+        if(y > -50 && y < canvas.height){
+            drawNote(note, y);
+            handleHit(note, now);
+        }
+    });
+
+    inputKey = null;
+
+    document.getElementById("score").innerText = score;
+    document.getElementById("combo").innerText = combo;
+
+    requestAnimationFrame(loop);
 }
 
-// hit line
-ctx.fillStyle="white";
-ctx.fillRect(0,hitY,canvas.width,3);
+// DRAW BACKGROUND + LANES
+function drawBackground(){
+    ctx.fillStyle = "#0a0a0f";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
 
-let freq = getPitch();
-let hole = detectHole(freq);
+    for(let i=0;i<laneCount;i++){
+        let x = i * laneWidth;
 
-notes.forEach(note=>{
-let y = hitY - (note.time-now)*speed;
+        ctx.fillStyle = i%2 ? "#111" : "#151515";
+        ctx.fillRect(x,0,laneWidth,canvas.height);
 
-if(y>-50 && y<canvas.height){
-let x=(note.hole-1)*laneWidth;
-
-ctx.fillStyle="cyan";
-ctx.fillRect(x+10,y,laneWidth-20,20);
-
-let delta=Math.abs(note.time-now);
-
-if(!note.judged && delta<0.2){
-
-if(hole===note.hole){
-note.judged=true;
-combo++;
-
-if(delta<0.08){
-score+=150;
-show("Perfect");
-}else{
-score+=100;
-show("Good");
+        ctx.strokeStyle="#222";
+        ctx.beginPath();
+        ctx.moveTo(x,0);
+        ctx.lineTo(x,canvas.height);
+        ctx.stroke();
+    }
 }
 
-}else{
-note.judged=true;
-combo=0;
-show("Miss");
-}
-}
+// HIT LINE
+function drawHitLine(){
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = "white";
 
-if(!note.judged && now-note.time>0.25){
-note.judged=true;
-combo=0;
-show("Miss");
-}
-}
-});
+    ctx.fillStyle="white";
+    ctx.fillRect(0,hitY,canvas.width,4);
 
-document.getElementById("score").innerText=score;
-document.getElementById("combo").innerText=combo;
-
-requestAnimationFrame(loop);
+    ctx.shadowBlur = 0;
 }
 
-// UI
-function show(text){
-const el=document.getElementById("feedback");
-el.innerText=text;
-el.style.color =
-text==="Perfect"?"lime":
-text==="Good"?"yellow":"red";
+// DRAW NOTE
+function drawNote(note, y){
+    let x = (note.hole - 1) * laneWidth;
+
+    let delta = Math.abs(note.time - (performance.now()/1000 - startTime));
+
+    if(delta < 0.1){
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = "lime";
+    } else {
+        ctx.shadowBlur = 0;
+    }
+
+    let grad = ctx.createLinearGradient(0,y,0,y+20);
+    grad.addColorStop(0,"#00f5ff");
+    grad.addColorStop(1,"#00a2ff");
+
+    ctx.fillStyle = grad;
+    roundRect(ctx, x+10, y, laneWidth-20, 20, 6);
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
 }
 
-// MENU
-const menu=document.getElementById("menu");
+// HIT LOGIC
+function handleHit(note, now){
+    let delta = Math.abs(note.time - now);
 
-songs.forEach((s,i)=>{
-let b=document.createElement("button");
-b.innerText=s.title;
-b.onclick=()=>startSong(i);
-menu.appendChild(b);
-});
+    if(!note.judged && delta < 0.2){
 
-initMic();
+        if(inputKey === note.hole){
+            note.judged = true;
+            combo++;
+
+            if(delta < 0.07){
+                score += 150;
+                feedback("Perfect","lime");
+            } else {
+                score += 100;
+                feedback("Good","yellow");
+            }
+
+            flash();
+
+        } else if(delta < 0.05){
+            // grace window
+        } else {
+            note.judged = true;
+            combo = 0;
+            feedback("Miss","red");
+        }
+    }
+
+    if(!note.judged && now - note.time > 0.25){
+        note.judged = true;
+        combo = 0;
+        feedback("Miss","red");
+    }
+}
+
+// FEEDBACK
+function feedback(text,color){
+    const el = document.getElementById("feedback");
+    el.innerText = text;
+    el.style.color = color;
+}
+
+// SCREEN FLASH
+function flash(){
+    canvas.style.background = "#1a1a1a";
+    setTimeout(()=>canvas.style.background="#0b0b0f",50);
+}
+
+// ROUNDED RECT
+function roundRect(ctx, x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.lineTo(x+w-r,y);
+    ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+    ctx.lineTo(x+w,y+h-r);
+    ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+    ctx.lineTo(x+r,y+h);
+    ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+    ctx.lineTo(x,y+r);
+    ctx.quadraticCurveTo(x,y,x+r,y);
+    ctx.closePath();
+}
 </script>
 
 </body>
